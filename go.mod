@@ -3,12 +3,14 @@ module github.com/go-pkgz/auth
 go 1.17
 
 require (
+	github.com/MicahParks/keyfunc v1.1.0
 	github.com/dghubble/oauth1 v0.7.1
 	github.com/go-oauth2/oauth2/v4 v4.5.1
 	github.com/go-pkgz/email v0.4.0
 	github.com/go-pkgz/repeater v1.1.3
 	github.com/go-pkgz/rest v1.16.0
 	github.com/golang-jwt/jwt v3.2.2+incompatible
+	github.com/golang-jwt/jwt/v4 v4.4.1
 	github.com/microcosm-cc/bluemonday v1.0.20
 	github.com/nullrocks/identicon v0.0.0-20180626043057-7875f45b0022
 	github.com/stretchr/testify v1.8.0
