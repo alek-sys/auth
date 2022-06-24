@@ -217,8 +217,53 @@ func TestMakeRedirURL(t *testing.T) {
 	}
 }
 
+func TestOauth2Refresh(t *testing.T) {
+	teardown := prepOauth2Test(t, 8981, 8982)
+	defer teardown()
+
+	jar, err := cookiejar.New(nil)
+	require.Nil(t, err)
+	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+
+	resp, err := client.Get("http://localhost:8981/login?site=remark&session=1")
+	claims := token.Claims{
+		User: &token.User{
+			ID: "mock_myuser1",
+		},
+	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	rt, err := mockRefreshTokenStore.Load(claims)
+	require.NoError(t, err)
+	assert.Equal(t, mockRefreshToken, rt, "refresh token stored")
+
+	mockRefreshToken = "new-refresh-token"
+	refresh, err := provider.Refresh(claims)
+	require.NoError(t, err)
+	assert.Equal(t, "mock_myuser2", refresh.User.ID, "user updated")
+
+	rt, err = mockRefreshTokenStore.Load(refresh)
+	require.NoError(t, err)
+	assert.Equal(t, mockRefreshToken, rt, "refresh token updated")
+}
+
+type memRefreshTokenStore map[string]string
+
+var mockRefreshToken = "IwOGYzYTlmM2YxOTQ5MGE3YmNmMDFkNTVk"
+var mockRefreshTokenStore = memRefreshTokenStore{}
+
+func (m memRefreshTokenStore) Save(t string, claims token.Claims) error {
+	m[claims.User.ID] = t
+	return nil
+}
+
+func (m memRefreshTokenStore) Load(claims token.Claims) (string, error) {
+	return m[claims.User.ID], nil
+}
+
+var provider Oauth2Handler
+
 func prepOauth2Test(t *testing.T, loginPort, authPort int) func() {
-	provider := Oauth2Handler{
+	provider = Oauth2Handler{
 		name: "mock",
 		endpoint: oauth2.Endpoint{
 			AuthURL:  fmt.Sprintf("http://localhost:%d/login/oauth/authorize", authPort),
@@ -234,6 +279,7 @@ func prepOauth2Test(t *testing.T, loginPort, authPort int) func() {
 			}
 			return userInfo
 		},
+		refreshTokenStore: mockRefreshTokenStore,
 	}
 
 	jwtService := token.NewService(token.Opts{
@@ -262,7 +308,7 @@ func prepOauth2Test(t *testing.T, loginPort, authPort int) func() {
 	ts := &http.Server{Addr: fmt.Sprintf(":%d", loginPort), Handler: http.HandlerFunc(svc.Handler)}
 
 	count := 0
-	useIds := []string{"myuser1", "myuser2"} // user for first ans second calls
+	useIds := []string{"myuser1", "myuser2"} // user for first and second calls
 
 	//nolint dupl
 	oauth := &http.Server{
@@ -276,14 +322,14 @@ func prepOauth2Test(t *testing.T, loginPort, authPort int) func() {
 					loginPort, state))
 				w.WriteHeader(302)
 			case strings.HasPrefix(r.URL.Path, "/login/oauth/access_token"):
-				res := `{
+				res := fmt.Sprintf(`{
 					"access_token":"MTQ0NjJkZmQ5OTM2NDE1ZTZjNGZmZjI3",
 					"token_type":"bearer",
 					"expires_in":3600,
-					"refresh_token":"IwOGYzYTlmM2YxOTQ5MGE3YmNmMDFkNTVk",
+					"refresh_token":"%s",
 					"scope":"create",
 					"state":"12345678"
-					}`
+					}`, mockRefreshToken)
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
 				w.WriteHeader(200)
 				_, err := w.Write([]byte(res))

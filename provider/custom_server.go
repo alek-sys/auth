@@ -27,6 +27,8 @@ type CustomHandlerOpt struct {
 	JwksURL   string
 	MapUserFn func(UserData, []byte) token.User
 	Scopes    []string
+
+	RefreshTokenStore RefreshTokenStore
 }
 
 // CustomServerOpt are options to initialize a custom go-oauth2/oauth2 server
@@ -205,12 +207,13 @@ func (c *CustomServer) Shutdown() {
 // NewCustom creates a handler for go-oauth2/oauth2 server
 func NewCustom(name string, p Params, copts CustomHandlerOpt) Oauth2Handler {
 	return initOauth2Handler(p, Oauth2Handler{
-		name:     name,
-		endpoint: copts.Endpoint,
-		scopes:   copts.Scopes,
-		infoURL:  copts.InfoURL,
-		jwksURL:  copts.JwksURL,
-		mapUser:  copts.MapUserFn,
+		name:              name,
+		endpoint:          copts.Endpoint,
+		scopes:            copts.Scopes,
+		infoURL:           copts.InfoURL,
+		jwksURL:           copts.JwksURL,
+		mapUser:           copts.MapUserFn,
+		refreshTokenStore: copts.RefreshTokenStore,
 	})
 }
 

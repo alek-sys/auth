@@ -24,6 +24,7 @@ type Claims struct {
 	SessionOnly bool       `json:"sess_only,omitempty"`
 	Handshake   *Handshake `json:"handshake,omitempty"` // used for oauth handshake
 	NoAva       bool       `json:"no-ava,omitempty"`    // disable avatar, always use identicon
+	Provider    string     `json:"prov,omitempty"`      // which provider was used for login
 }
 
 // Handshake used for oauth handshake

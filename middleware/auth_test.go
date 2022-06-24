@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"fmt"
+	"github.com/go-pkgz/auth/provider"
+	"github.com/golang-jwt/jwt"
 	"io"
 	"log"
 	"net/http"
@@ -28,6 +30,8 @@ var testJwtWithHandshake = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0ZXN
 var testJwtNoUser = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjI3ODkxOTE4MjIsImp0aSI6InJhbmRvbSBpZCIsImlzcyI6InJlbWFyazQyIiwibmJmIjoxNTI2ODg0MjIyfQ.sBpblkbBRzZsBSPPNrTWqA5h7h54solrw5L4IypJT_o"
 
 var testJwtWithRole = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0ZXN0X3N5cyIsImV4cCI6Mjc4OTE5MTgyMiwianRpIjoicmFuZG9tIGlkIiwiaXNzIjoicmVtYXJrNDIiLCJuYmYiOjE1MjY4ODQyMjIsInVzZXIiOnsibmFtZSI6Im5hbWUxIiwiaWQiOiJpZDEiLCJwaWN0dXJlIjoiaHR0cDovL2V4YW1wbGUuY29tL3BpYy5wbmciLCJpcCI6IjEyNy4wLjAuMSIsImVtYWlsIjoibWVAZXhhbXBsZS5jb20iLCJhdHRycyI6eyJib29sYSI6dHJ1ZSwic3RyYSI6InN0cmEtdmFsIn0sInJvbGUiOiJlbXBsb3llZSJ9fQ.VLW4_LUDZq_eFc9F1Zx1lbv2Whic2VHy6C0dJ5azL8A"
+
+var testJWTKey = "xyz 12345"
 
 func TestAuthJWTCookie(t *testing.T) {
 	a := makeTestAuth(t)
@@ -104,6 +108,30 @@ func TestAuthJWTHeader(t *testing.T) {
 
 func TestAuthJWTRefresh(t *testing.T) {
 	a := makeTestAuth(t)
+
+	expToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, token.Claims{
+		StandardClaims: jwt.StandardClaims{
+			Id:        "random id",
+			ExpiresAt: time.Now().Add(-1 * time.Hour).Unix(),
+			Issuer:    "remark42",
+			NotBefore: time.Now().Unix(),
+		},
+		User: &token.User{
+			Name:    "name1",
+			ID:      "id1",
+			Picture: "http://example.com/pic.png",
+			IP:      "127.0.0.1",
+			Email:   "me@example.com",
+			Attributes: map[string]interface{}{
+				"boola": true,
+				"stra":  "stra-val",
+			},
+		},
+		Provider: "mockRefreshableProvider",
+	}).SignedString([]byte(testJWTKey))
+
+	require.NoError(t, err)
+
 	server := httptest.NewServer(makeTestMux(t, &a, true))
 	defer server.Close()
 
@@ -114,7 +142,7 @@ func TestAuthJWTRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	expiration := int(365 * 24 * time.Hour.Seconds()) //nolint
-	req.AddCookie(&http.Cookie{Name: "JWT", Value: testJwtExpired, HttpOnly: true, Path: "/", MaxAge: expiration, Secure: false})
+	req.AddCookie(&http.Cookie{Name: "JWT", Value: expToken, HttpOnly: true, Path: "/", MaxAge: expiration, Secure: false})
 	req.Header.Add("X-XSRF-TOKEN", "random id")
 
 	resp, err := client.Do(req)
@@ -125,13 +153,14 @@ func TestAuthJWTRefresh(t *testing.T) {
 	assert.Equal(t, 2, len(cookies))
 	assert.Equal(t, "JWT", resp.Cookies()[0].Name)
 	t.Log(resp.Cookies()[0].Value)
-	assert.True(t, resp.Cookies()[0].Value != testJwtExpired, "jwt token changed")
+	assert.True(t, resp.Cookies()[0].Value != expToken, "jwt token changed")
 
 	claims, err := a.JWTService.Parse(resp.Cookies()[0].Value)
 	assert.NoError(t, err)
 	ts := time.Unix(claims.ExpiresAt, 0)
 	assert.True(t, ts.After(time.Now()), "expiration in the future")
 	log.Print(time.Unix(claims.ExpiresAt, 0))
+	assert.Equal(t, "refreshed user name", claims.User.Name, "refresh provider called")
 }
 
 func TestAuthJWTRefreshConcurrentWithCache(t *testing.T) {
@@ -479,9 +508,29 @@ func makeTestMux(_ *testing.T, a *Authenticator, required bool) http.Handler {
 	return mux
 }
 
+type mockRefreshableProvider func(claims token.Claims) (token.Claims, error)
+
+func (m mockRefreshableProvider) Refresh(claims token.Claims) (token.Claims, error) {
+	return m(claims)
+}
+
+func (m mockRefreshableProvider) Name() string {
+	return "mockRefreshableProvider"
+}
+func (m mockRefreshableProvider) LoginHandler(http.ResponseWriter, *http.Request)  {}
+func (m mockRefreshableProvider) AuthHandler(http.ResponseWriter, *http.Request)   {}
+func (m mockRefreshableProvider) LogoutHandler(http.ResponseWriter, *http.Request) {}
+
+var updateUsername provider.Provider = mockRefreshableProvider(func(claims token.Claims) (token.Claims, error) {
+	claims.User.Name = "refreshed user name"
+	return claims, nil
+})
+
 func makeTestAuth(_ *testing.T) Authenticator {
 	j := token.NewService(token.Opts{
-		SecretReader:   token.SecretFunc(func(string) (string, error) { return "xyz 12345", nil }),
+		SecretReader: token.SecretFunc(func(string) (string, error) {
+			return testJWTKey, nil
+		}),
 		SecureCookies:  false,
 		TokenDuration:  time.Second,
 		CookieDuration: time.Hour * 24 * 31,
@@ -493,6 +542,7 @@ func makeTestAuth(_ *testing.T) Authenticator {
 	})
 
 	return Authenticator{
+		Providers:   []provider.Service{provider.NewService(updateUsername)},
 		AdminPasswd: "123456",
 		JWTService:  j,
 		Validator:   token.ValidatorFunc(func(token string, claims token.Claims) bool { return true }),

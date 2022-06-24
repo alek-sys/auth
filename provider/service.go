@@ -47,6 +47,10 @@ type Provider interface {
 	LogoutHandler(w http.ResponseWriter, r *http.Request)
 }
 
+type TokenRefresher interface {
+	Refresh(claims token.Claims) (token.Claims, error)
+}
+
 // Handler returns auth routes for given provider
 func (p Service) Handler(w http.ResponseWriter, r *http.Request) {
 

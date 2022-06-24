@@ -28,15 +28,21 @@ type Oauth2Handler struct {
 	Params
 
 	// all of these fields specific to particular oauth2 provider
-	name     string
-	infoURL  string
-	jwksURL  string
-	endpoint oauth2.Endpoint
-	scopes   []string
-	mapUser  func(UserData, []byte) token.User // map info from InfoURL to User
-	conf     oauth2.Config
-	keyfunc  jwt.Keyfunc
-	kfLock   *sync.Mutex
+	name              string
+	infoURL           string
+	jwksURL           string
+	endpoint          oauth2.Endpoint
+	scopes            []string
+	mapUser           func(UserData, []byte) token.User // map info from InfoURL to User
+	conf              oauth2.Config
+	keyfunc           jwt.Keyfunc
+	kfLock            *sync.Mutex
+	refreshTokenStore RefreshTokenStore
+}
+
+type RefreshTokenStore interface {
+	Save(token string, claims token.Claims) error
+	Load(claims token.Claims) (string, error)
 }
 
 // Params to make initialized and ready to use provider
@@ -130,7 +136,8 @@ func (p Oauth2Handler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt: time.Now().Add(30 * time.Minute).Unix(),
 			NotBefore: time.Now().Add(-1 * time.Minute).Unix(),
 		},
-		NoAva: r.URL.Query().Get("noava") == "1",
+		NoAva:    r.URL.Query().Get("noava") == "1",
+		Provider: p.Name(),
 	}
 
 	if _, err := p.JwtService.Set(w, claims); err != nil {
@@ -178,65 +185,33 @@ func (p Oauth2Handler) AuthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims, err := p.loadUser(tok, oauthClaims)
+	if err != nil {
+		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to load user")
+		return
+	}
+
 	client := p.conf.Client(context.Background(), tok)
-
-	var u token.User
-	var userData UserData
-	var rawUserData []byte
-
-	if p.UseOpenID {
-		userData, rawUserData, err = p.loadUserFromIDToken(tok)
+	if claims.NoAva {
+		claims.User.Picture = "" // reset picture on no avatar request
 	}
 
-	if !p.UseOpenID {
-		userData, rawUserData, err = p.loadUserFromEndpoint(client)
-	}
-
-	if err != nil {
-		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to load user data")
-		return
-	}
-
-	u = p.mapUser(userData, rawUserData)
-
-	if oauthClaims.NoAva {
-		u.Picture = "" // reset picture on no avatar request
-	}
-	u, err = setAvatar(p.AvatarSaver, u, client)
-	if err != nil {
-		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to save avatar to proxy")
-		return
-	}
-
-	cid, err := randToken()
-	if err != nil {
-		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to make claim's id")
-		return
-	}
-	claims := token.Claims{
-		User: &u,
-		StandardClaims: jwt.StandardClaims{
-			Issuer:   p.Issuer,
-			Id:       cid,
-			Audience: oauthClaims.Audience,
-		},
-		SessionOnly: oauthClaims.SessionOnly,
-		NoAva:       oauthClaims.NoAva,
-	}
+	userWithAva, err := setAvatar(p.AvatarSaver, *claims.User, client)
+	claims.User = &userWithAva
 
 	if _, err = p.JwtService.Set(w, claims); err != nil {
 		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to set token")
 		return
 	}
 
-	p.Logf("[DEBUG] user info %+v", u)
+	p.Logf("[DEBUG] user info %+v", claims.User)
 
 	// redirect to back url if presented in login query params
 	if oauthClaims.Handshake != nil && oauthClaims.Handshake.From != "" {
 		http.Redirect(w, r, oauthClaims.Handshake.From, http.StatusTemporaryRedirect)
 		return
 	}
-	rest.RenderJSON(w, &u)
+	rest.RenderJSON(w, &claims.User)
 }
 
 // LogoutHandler - GET /logout
@@ -246,6 +221,74 @@ func (p Oauth2Handler) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.JwtService.Reset(w)
+}
+
+func (p Oauth2Handler) Refresh(claims token.Claims) (token.Claims, error) {
+	if p.refreshTokenStore == nil {
+		p.L.Logf("[WARN] refresh token store is not set, can't refresh tokens")
+		return claims, nil
+	}
+
+	rTk, err := p.refreshTokenStore.Load(claims)
+	if err != nil {
+		return token.Claims{}, err
+	}
+
+	tokenSource := p.conf.TokenSource(context.Background(), &oauth2.Token{RefreshToken: rTk})
+	tok, err := tokenSource.Token()
+	if err != nil {
+		return token.Claims{}, err
+	}
+
+	return p.loadUser(tok, claims)
+}
+
+func (p Oauth2Handler) loadUser(tok *oauth2.Token, claims token.Claims) (token.Claims, error) {
+	var err error
+	var u token.User
+	var userData UserData
+	var rawUserData []byte
+
+	if p.UseOpenID {
+		userData, rawUserData, err = p.loadUserFromIDToken(tok)
+	}
+
+	if !p.UseOpenID {
+		client := p.conf.Client(context.Background(), tok)
+		userData, rawUserData, err = p.loadUserFromEndpoint(client)
+	}
+
+	if err != nil {
+		return token.Claims{}, err
+	}
+
+	u = p.mapUser(userData, rawUserData)
+
+	cid, err := randToken()
+	if err != nil {
+		return token.Claims{}, err
+	}
+
+	tk := token.Claims{
+		User: &u,
+		StandardClaims: jwt.StandardClaims{
+			Issuer:   p.Issuer,
+			Id:       cid,
+			Audience: claims.Audience,
+		},
+		SessionOnly: claims.SessionOnly,
+		NoAva:       claims.NoAva,
+		Provider:    p.Name(),
+	}
+
+	if p.refreshTokenStore != nil {
+		err = p.refreshTokenStore.Save(tok.RefreshToken, tk)
+		if err != nil {
+			return token.Claims{}, errors.Wrap(err, "failed to save refresh token")
+		}
+	}
+
+	return tk, nil
 }
 
 func (p Oauth2Handler) loadUserFromIDToken(tok *oauth2.Token) (UserData, []byte, error) {

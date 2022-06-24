@@ -157,7 +157,24 @@ func (a *Authenticator) refreshExpiredToken(w http.ResponseWriter, claims token.
 		}
 	}
 
-	claims.ExpiresAt = 0                  // this will cause now+duration for refreshed token
+	claims.ExpiresAt = 0 // this will cause now+duration for refreshed token
+	var prov provider.Service
+	for _, p := range a.Providers {
+		if p.Name() == claims.Provider {
+			prov = p
+			break
+		}
+	}
+
+	// if the provider supports refresh flow (e.g. OAuth2), call it to refresh claims
+	if rHandler, isRefreshable := prov.Provider.(provider.TokenRefresher); isRefreshable {
+		var err error
+		claims, err = rHandler.Refresh(claims)
+		if err != nil {
+			return token.Claims{}, err
+		}
+	}
+
 	c, err := a.JWTService.Set(w, claims) // Set changes token
 	if err != nil {
 		return token.Claims{}, err

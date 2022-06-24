@@ -179,11 +179,18 @@ func (s *Service) Handlers() (authHandler, avatarHandler http.Handler) {
 		// show user info
 		if elems[len(elems)-1] == "user" {
 			claims, _, err := s.jwtService.Get(r)
-			if err != nil || claims.User == nil {
+			if err != nil {
 				w.WriteHeader(http.StatusUnauthorized)
 				rest.RenderJSON(w, rest.JSON{"error": err.Error()})
 				return
 			}
+
+			if claims.User == nil {
+				w.WriteHeader(http.StatusUnauthorized)
+				rest.RenderJSON(w, rest.JSON{"error": "user not set"})
+				return
+			}
+
 			rest.RenderJSON(w, claims.User)
 			return
 		}
