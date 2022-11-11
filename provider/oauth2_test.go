@@ -158,7 +158,7 @@ func TestOauth2Logout(t *testing.T) {
 	require.Nil(t, err)
 	resp, err := client.Do(req)
 	require.Nil(t, err)
-	assert.Equal(t, 403, resp.StatusCode, "user not lagged in")
+	assert.Equal(t, 403, resp.StatusCode, "user not logged in")
 
 	req, err = http.NewRequest("GET", "http://localhost:8691/logout", http.NoBody)
 	require.NoError(t, err)
@@ -174,6 +174,38 @@ func TestOauth2Logout(t *testing.T) {
 	assert.Equal(t, "", resp.Cookies()[0].Value)
 	assert.Equal(t, "XSRF-TOKEN", resp.Cookies()[1].Name, "xsrf cookie cleared")
 	assert.Equal(t, "", resp.Cookies()[1].Value)
+}
+
+func TestOauth2LogoutWithURI(t *testing.T) {
+	expectedLogoutURL := fmt.Sprintf("http://localhost:%d/logout?client_id=cid&logout_uri=http://localhost:%d/home", 8692, 8691)
+	teardown := prepOauth2TestWithConfig(t, 8691, 8692, func(handler *Oauth2Handler) {
+		handler.logoutURL = expectedLogoutURL
+	})
+	defer teardown()
+
+	jar, err := cookiejar.New(nil)
+	require.Nil(t, err)
+	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+
+	req, err := http.NewRequest("GET", "http://localhost:8691/logout", http.NoBody)
+	require.NoError(t, err)
+	expiration := int(365 * 24 * time.Hour.Seconds()) //nolint
+	req.AddCookie(&http.Cookie{Name: "JWT", Value: testJwtValid, HttpOnly: true, Path: "/", MaxAge: expiration, Secure: false})
+	req.Header.Add("X-XSRF-TOKEN", "random id")
+	resp, err := client.Do(req)
+	require.Nil(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+
+	require.Equal(t, "http://localhost:8691/logout", resp.Request.URL.String())
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var logoutResp struct {
+		RedirectURL string `json:"logout_url"`
+	}
+	require.NoError(t, json.Unmarshal(body, &logoutResp))
+	require.Equal(t, expectedLogoutURL, logoutResp.RedirectURL)
 }
 
 func TestOauth2InitProvider(t *testing.T) {
@@ -263,6 +295,10 @@ func (m memRefreshTokenStore) Load(claims token.Claims) (string, error) {
 var provider Oauth2Handler
 
 func prepOauth2Test(t *testing.T, loginPort, authPort int) func() {
+	return prepOauth2TestWithConfig(t, loginPort, authPort, nil)
+}
+
+func prepOauth2TestWithConfig(t *testing.T, loginPort, authPort int, config func(handler *Oauth2Handler)) func() {
 	provider = Oauth2Handler{
 		name: "mock",
 		endpoint: oauth2.Endpoint{
@@ -280,6 +316,10 @@ func prepOauth2Test(t *testing.T, loginPort, authPort int) func() {
 			return userInfo
 		},
 		refreshTokenStore: mockRefreshTokenStore,
+	}
+
+	if config != nil {
+		config(&provider)
 	}
 
 	jwtService := token.NewService(token.Opts{

@@ -25,6 +25,7 @@ type CustomHandlerOpt struct {
 	Endpoint  oauth2.Endpoint
 	InfoURL   string
 	JwksURL   string
+	LogoutURL string
 	MapUserFn func(UserData, []byte) token.User
 	Scopes    []string
 
@@ -212,6 +213,7 @@ func NewCustom(name string, p Params, copts CustomHandlerOpt) Oauth2Handler {
 		scopes:            copts.Scopes,
 		infoURL:           copts.InfoURL,
 		jwksURL:           copts.JwksURL,
+		logoutURL:         copts.LogoutURL,
 		mapUser:           copts.MapUserFn,
 		refreshTokenStore: copts.RefreshTokenStore,
 	})

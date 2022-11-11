@@ -38,6 +38,7 @@ type Oauth2Handler struct {
 	keyfunc           jwt.Keyfunc
 	kfLock            *sync.Mutex
 	refreshTokenStore RefreshTokenStore
+	logoutURL         string
 }
 
 type RefreshTokenStore interface {
@@ -221,6 +222,12 @@ func (p Oauth2Handler) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.JwtService.Reset(w)
+	if p.logoutURL != "" {
+		// can't return redirect because logout is called via XHR request to pass XSRF and will be blocked by CORS
+		// client should redirect to logoutURL manually
+		rest.RenderJSON(w, map[string]string{"logout_url": p.logoutURL})
+		return
+	}
 }
 
 func (p Oauth2Handler) Refresh(claims token.Claims) (token.Claims, error) {
