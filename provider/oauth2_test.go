@@ -167,7 +167,7 @@ func TestOauth2Logout(t *testing.T) {
 	req.Header.Add("X-XSRF-TOKEN", "random id")
 	resp, err = client.Do(req)
 	require.Nil(t, err)
-	require.Equal(t, 200, resp.StatusCode)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	assert.Equal(t, 2, len(resp.Cookies()))
 	assert.Equal(t, "JWT", resp.Cookies()[0].Name, "token cookie cleared")

@@ -167,23 +167,26 @@ func (s *Service) Handlers() (authHandler, avatarHandler http.Handler) {
 
 		// allow logout without specifying provider, get it from the token
 		if elems[len(elems)-1] == "logout" {
+			if len(s.providers) == 0 {
+				rest.SendErrorJSON(w, r, s.logger, http.StatusBadRequest, nil, "providers not defined")
+				return
+			}
+
+			defaultProvider := s.providers[0]
 			tk, _, err := s.jwtService.Get(r)
 			if err != nil {
-				s.logger.Logf("[ERROR] failed to get token from request, %v", err)
-				w.WriteHeader(http.StatusBadRequest)
-				rest.RenderJSON(w, rest.JSON{"error": "providers not defined"})
+				s.logger.Logf("[WARN] failed to get token from request, using the first provider to log out, %v", err)
+				defaultProvider.LogoutHandler(w, r)
 				return
 			}
 
-			service, err := s.Provider(tk.Provider)
-			if err != nil {
-				s.logger.Logf("[ERROR] failed to get provider from token, %v", err)
-				w.WriteHeader(http.StatusBadRequest)
-				rest.RenderJSON(w, rest.JSON{"error": "provider not found"})
+			if tokenProvider, err := s.Provider(tk.Provider); err == nil {
+				s.logger.Logf("[DEBUG] using provider %s to log out", tokenProvider.Name())
+				tokenProvider.LogoutHandler(w, r)
 				return
 			}
 
-			service.LogoutHandler(w, r)
+			defaultProvider.LogoutHandler(w, r)
 			return
 		}
 

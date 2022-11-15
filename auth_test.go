@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"github.com/golang-jwt/jwt"
 	"golang.org/x/oauth2"
 	"io"
 	"io/ioutil"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,13 +295,50 @@ func TestLogout(t *testing.T) {
 	// logout
 	resp, err = client.Get("http://127.0.0.1:8089/auth/logout")
 	require.Nil(t, err)
-	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, 204, resp.StatusCode)
 	defer resp.Body.Close()
 
 	resp, err = client.Get("http://127.0.0.1:8089/private")
 	require.Nil(t, err)
 	assert.Equal(t, 401, resp.StatusCode)
 	assert.NoError(t, resp.Body.Close())
+}
+
+// test pre-1.20 tokens for compatibility
+func TestLogoutOldToken(t *testing.T) {
+	svc, teardown := prepService(t)
+	defer teardown()
+
+	tok, err := svc.jwtService.Token(token.Claims{
+		StandardClaims: jwt.StandardClaims{},
+		User:           &token.User{ID: "dev_user", Name: "dev_user", Audience: "my-test-site"},
+		SessionOnly:    false,
+		// provider is not set
+	})
+
+	require.NoError(t, err)
+
+	// login
+	jar, err := cookiejar.New(nil)
+	require.Nil(t, err)
+
+	testUrl, err := url.Parse("http://127.0.0.1:8089")
+	require.NoError(t, err)
+
+	jar.SetCookies(testUrl, []*http.Cookie{
+		{
+			Name:  "JWT",
+			Value: tok,
+		},
+	})
+
+	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+
+	// logout
+	resp, err := client.Get("http://127.0.0.1:8089/auth/logout")
+	require.Nil(t, err)
+	assert.Equal(t, 204, resp.StatusCode)
+	defer resp.Body.Close()
 }
 
 func TestLogoutNoProviders(t *testing.T) {

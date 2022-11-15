@@ -222,6 +222,11 @@ func (p Oauth2Handler) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.JwtService.Reset(w)
+	if p.logoutURL == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if p.logoutURL != "" {
 		// can't return redirect because logout is called via XHR request to pass XSRF and will be blocked by CORS
 		// client should redirect to logoutURL manually
